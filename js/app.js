@@ -1,4 +1,5 @@
 import { CATEGORIES, DEFAULT_SETTINGS, scoreGrid, gridToCsv, project, validateSettings } from './engine.js';
+import { createColorScale, displayScore } from './score-colors.js';
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -34,6 +35,8 @@ try { const saved = JSON.parse(localStorage.getItem(settingsKey)); if (saved) se
 if (![100, 250, 500, 1000].includes(settings.gridSize)) settings.gridSize = 250;
 let region = 'central';
 let layer = 'overall';
+let colorMode = 'relative';
+let colorScale = createColorScale([]);
 let rawGrid = EMPTY;
 let scoredGrid = EMPTY;
 let selectedId = null;
@@ -139,13 +142,28 @@ function rescore() {
   $('#average-score').textContent = valid.length ? (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(1) : '—';
   $('#cell-count').textContent = number(scoredGrid.features.length);
   $('#legend-title').textContent = layer === 'overall' ? '综合便利度' : `${CATEGORY[layer].label}接近程度`;
+  refreshColors();
+}
+function refreshColors() {
+  colorScale = createColorScale(scoredGrid.features.map(metric), colorMode);
+  const format = (value) => value.toFixed(1);
+  $('#legend-bins').innerHTML = colorScale.bins.length ? colorScale.bins.map((bin) => {
+    const range = bin.min === bin.max ? `${format(bin.min)} 分` : `${format(bin.min)} – ${bin.upperInclusive ? '' : '<'}${format(bin.max)}`;
+    return `<div class="legend-bin"><span class="legend-swatch" style="background:${bin.color}"></span><span class="legend-range">${range}</span><span class="legend-count">${number(bin.count)} 格</span></div>`;
+  }).join('') : '<div class="legend-empty">暂无有效评分</div>';
+  $('#legend-note').textContent = colorMode === 'relative' ? '当前区域内对比 · 同分同色' : '固定 0–100 分 · 可跨区域比较';
+  $$('[data-color-mode]').forEach((button) => {
+    const active = button.dataset.colorMode === colorMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
   renderGrid();
   renderDetail();
 }
 function mapGrid() {
   return { type: 'FeatureCollection', features: scoredGrid.features.map((feature) => ({
     type: 'Feature', id: feature.id, geometry: feature.geometry,
-    properties: { id: feature.properties.id, displayScore: metric(feature) ?? -1 },
+    properties: { id: feature.properties.id, displayScore: displayScore(metric(feature)) ?? -1, fillColor: colorScale.color(metric(feature)) },
   })) };
 }
 function renderGrid() {
@@ -166,6 +184,7 @@ function renderDetail() {
     return `<button class="facility-detail" data-detail-category="${id}" style="--category-color:${CATEGORY[id].color}" title="查看${CATEGORY[id].label}的直线连接">${icon(id)}<div class="facility-body"><div class="facility-title"><span>${id === 'metro' ? '地铁入口' : CATEGORY[id].label}</span><strong>${nearest ? escape(distanceText(nearest.distance)) : '—'}</strong></div><div class="facility-name">${nearest ? escape(nearest.name) : '该类别暂无记录'}${settings.weights[id] === 0 ? ' · 未计入总分' : ''}</div><div class="mini-progress"><span style="width:${categoryScore ?? 0}%"></span></div></div></button>`;
   }).join('')}</div><div class="detail-bottom"><span>ⓘ</span><span>已收录设施中的最近点。直线距离不计跨江绕行，开放数据收录可能不完整。</span></div>`;
   $('#detail-card').hidden = false;
+  $('#detail-card .detail-score').style.color = colorScale.color(score);
   $('#close-detail').addEventListener('click', () => { $('#detail-card').hidden = true; selectedId = null; renderGrid(); drawConnections(null); });
   $$('.facility-detail').forEach((button) => button.addEventListener('click', () => {
     const id = button.dataset.detailCategory;
@@ -244,12 +263,13 @@ function setupLayers() {
   const labels = map.getStyle().layers.find((l) => l.type === 'symbol' && l.layout?.['text-field']);
   const before = labels?.id;
   map.addLayer({ id: 'grid-fill', type: 'fill', source: 'grid', paint: {
-    'fill-color': ['case', ['<', ['get', 'displayScore'], 0], '#d3d9ce', ['interpolate', ['linear'], ['get', 'displayScore'], 0, '#d3b793', 25, '#d9cda6', 50, '#b1cb9d', 75, '#78b18c', 100, '#368461']],
-    'fill-opacity': .54,
+    'fill-color': ['get', 'fillColor'],
+    'fill-opacity': .84,
   } }, before);
-  map.addLayer({ id: 'grid-lines', type: 'line', source: 'grid', paint: { 'line-color': '#f9fcf4', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, .25, 14, .8], 'line-opacity': .75 } }, before);
-  map.addLayer({ id: 'selection-fill', type: 'fill', source: 'selection', paint: { 'fill-color': '#d9efb6', 'fill-opacity': .25 } });
-  map.addLayer({ id: 'selection-line', type: 'line', source: 'selection', paint: { 'line-color': '#1f5a43', 'line-width': 2.3 } });
+  map.addLayer({ id: 'grid-lines', type: 'line', source: 'grid', paint: { 'line-color': '#fff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, .2, 14, .65], 'line-opacity': .48 } }, before);
+  map.addLayer({ id: 'selection-fill', type: 'fill', source: 'selection', paint: { 'fill-color': '#fff', 'fill-opacity': .08 } });
+  map.addLayer({ id: 'selection-halo', type: 'line', source: 'selection', paint: { 'line-color': '#fff', 'line-width': 5.5 } });
+  map.addLayer({ id: 'selection-line', type: 'line', source: 'selection', paint: { 'line-color': '#183942', 'line-width': 2.5 } });
   map.addLayer({ id: 'poi-points', type: 'circle', source: 'pois', layout: { visibility: $('#show-pois').checked ? 'visible' : 'none' }, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 2, 14, 4], 'circle-color': ['match', ['get', 'category'], ...CATEGORIES.flatMap((c) => [c.id, c.color]), '#7c8a70'], 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.1, 'circle-opacity': .88 } });
   map.addLayer({ id: 'connection-lines', type: 'line', source: 'connections', paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [3, 2], 'line-opacity': .95 } });
   map.addLayer({ id: 'endpoint-points', type: 'circle', source: 'endpoints', paint: { 'circle-color': ['get', 'color'], 'circle-radius': 4.5, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 } });
@@ -353,6 +373,10 @@ function searchPois() {
   }));
 }
 function setupEvents() {
+  $$('[data-color-mode]').forEach((button) => button.addEventListener('click', () => {
+    colorMode = button.dataset.colorMode;
+    refreshColors();
+  }));
   $('#region-select').addEventListener('change', (event) => {
     region = event.target.value;
     if (region === 'all' && settings.gridSize < 1000) { settings.gridSize = 1000; updateGridControls(); }
