@@ -4,7 +4,7 @@ import { createColorScale, displayScore } from './score-colors.js';
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const EMPTY = { type: 'FeatureCollection', features: [] };
-const ORDER = ['metro', 'school', 'mall', 'cafe'];
+const ORDER = ['metro', 'school', 'mall', 'cafe', 'sports', 'library'];
 const CATEGORY = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
 const REGIONS = {
   central: { label: '上海中心城区', bbox: [121.41, 31.18, 121.55, 31.29] },
@@ -14,21 +14,23 @@ const REGIONS = {
   all: { label: '上海主要陆域', bbox: [120.85, 30.65, 122.05, 31.89] },
 };
 const PRESETS = {
-  balanced: { metro: 40, school: 25, mall: 20, cafe: 15 },
-  commute: { metro: 65, school: 5, mall: 10, cafe: 20 },
-  family: { metro: 25, school: 50, mall: 20, cafe: 5 },
+  balanced: { metro: 30, school: 20, mall: 15, cafe: 10, sports: 15, library: 10 },
+  commute: { metro: 55, school: 5, mall: 10, cafe: 15, sports: 10, library: 5 },
+  family: { metro: 20, school: 30, mall: 15, cafe: 5, sports: 20, library: 10 },
 };
 const ICONS = {
   metro: '<rect x="5" y="3" width="14" height="15" rx="4"/><path d="M5 10h14M8 21l2-3m6 3-2-3M9 14h.01M15 14h.01M9 6h6"/>',
   school: '<path d="m3 9 9-5 9 5-9 5-9-5Z"/><path d="M6 11v7c4 3 8 3 12 0v-7M21 9v8"/>',
   mall: '<path d="M5 7h14l2 4H3l2-4Z"/><path d="M4 11v10h16V11M8 7V3h8v4M9 21v-6h6v6"/>',
   cafe: '<path d="M4 8h13v7a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V8Z"/><path d="M17 9h2a3 3 0 0 1 0 6h-2M7 3v2m5-2v2M3 23h16"/>',
+  sports: '<path d="m5 5 14 14M3 7l4-4m10 18 4-4M2 10l8-8m4 20 8-8M5 13l8-8m-2 14 8-8"/>',
+  library: '<path d="M3 5h6a4 4 0 0 1 3 2 4 4 0 0 1 3-2h6v15h-6a4 4 0 0 0-3 2 4 4 0 0 0-3-2H3V5Zm9 2v15M6 9h3m6 0h3M6 13h3m6 0h3"/>',
 };
 const icon = (id) => `<span class="category-icon" style="--category-color:${CATEGORY[id].color}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[id]}</svg></span>`;
 const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const number = (value) => Number(value).toLocaleString('zh-CN');
 const distanceText = (distance) => distance === null || distance === undefined ? '暂无数据' : distance >= 1000 ? `${(distance / 1000).toFixed(2)} km` : `${Math.round(distance)} m`;
-const settingsKey = 'shanghai-neighborhood-settings-v1';
+const settingsKey = 'shanghai-neighborhood-settings-v2';
 
 let settings = structuredClone(DEFAULT_SETTINGS);
 try { const saved = JSON.parse(localStorage.getItem(settingsKey)); if (saved) settings = validateSettings(saved); } catch { /* Private mode or old settings: use defaults. */ }
@@ -98,7 +100,7 @@ function renderWeightControls() {
     const c = CATEGORY[id];
     const threshold = settings.thresholds[id];
     const weight = settings.weights[id];
-    return `<div class="weight-row" style="--category-color:${c.color};--range:${weight}%"><div class="weight-heading">${icon(id)}<span><span class="weight-name">${id === 'metro' ? '地铁入口' : c.label}</span><span class="weight-subtitle" id="threshold-caption-${id}">满分 ≤ ${distanceText(threshold.good)} · 零分 ≥ ${distanceText(threshold.max)}</span></span><span class="weight-number" id="weight-display-${id}">${sum ? Math.round(weight / sum * 100) : 0}<small>%</small></span></div><label class="visually-hidden" for="weight-${id}">${c.label}权重</label><input id="weight-${id}" data-weight="${id}" type="range" min="0" max="100" step="1" value="${weight}" aria-valuetext="${weight}"></div>`;
+    return `<div class="weight-row" style="--category-color:${c.color};--range:${weight}%"><div class="weight-heading">${icon(id)}<span><span class="weight-name">${id === 'metro' ? '地铁' : c.label}</span><span class="weight-subtitle" id="threshold-caption-${id}">距离 ≤ ${distanceText(threshold.good)} 满分 · 数量目标 ${threshold.targetCount}${id === 'metro' ? '站' : '处'}</span></span><span class="weight-number" id="weight-display-${id}">${sum ? Math.round(weight / sum * 100) : 0}<small>%</small></span></div><label class="visually-hidden" for="weight-${id}">${c.label}权重</label><input id="weight-${id}" data-weight="${id}" type="range" min="0" max="100" step="1" value="${weight}" aria-valuetext="${weight}"></div>`;
   }).join('');
   $$('#weight-controls input').forEach((input) => input.addEventListener('input', () => {
     const id = input.dataset.weight;
@@ -118,6 +120,19 @@ function renderWeightControls() {
     scoreTimer = setTimeout(rescore, 65);
   }));
   updateGridControls();
+  updateQuantityControls();
+}
+function updateQuantityControls() {
+  const q = settings.quantityWeight;
+  $('#quantity-weight').value = q;
+  $('#quantity-weight-value').textContent = `${q}%`;
+  $('#quantity-model-caption').textContent = `距离 ${100 - q}% + 数量 ${q}%`;
+  $('#count-radius-caption').textContent = `${distanceText(settings.countRadius)} 内已收录的独立设施`;
+  $$('[data-count-radius]').forEach((button) => {
+    const active = Number(button.dataset.countRadius) === settings.countRadius;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
 }
 function updateWeightNumbers() {
   const sum = Object.values(settings.weights).reduce((a, b) => a + b, 0);
@@ -141,7 +156,7 @@ function rescore() {
   const valid = scoredGrid.features.map(metric).filter((score) => score !== null && Number.isFinite(score));
   $('#average-score').textContent = valid.length ? (valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(1) : '—';
   $('#cell-count').textContent = number(scoredGrid.features.length);
-  $('#legend-title').textContent = layer === 'overall' ? '综合便利度' : `${CATEGORY[layer].label}接近程度`;
+  $('#legend-title').textContent = layer === 'overall' ? '综合便利度' : `${CATEGORY[layer].label}便利度`;
   refreshColors();
 }
 function refreshColors() {
@@ -178,11 +193,17 @@ function renderDetail() {
   const p = feature.properties;
   const score = metric(feature);
   const verdict = score === null ? '数据不足' : score >= 85 ? '日常触手可及' : score >= 65 ? '生活较便利' : score >= 40 ? '仍有探索空间' : '设施相对较远';
-  $('#detail-card').innerHTML = `<div class="detail-top"><div class="detail-label"><span>网格 ${escape(p.id)}</span><button id="close-detail" aria-label="收起网格详情">收起 ↗</button></div><div class="detail-score-line"><div class="detail-score">${score === null ? '—' : score.toFixed(1)}<small>/100</small></div><div class="score-verdict"><strong>${verdict}</strong><span>${layer === 'overall' ? '综合便利度评分' : `${CATEGORY[layer].label}分项评分`}</span></div></div><div class="detail-coordinates">${p.center[0].toFixed(5)}° E &nbsp; ${p.center[1].toFixed(5)}° N · ${computedGridSize} m 网格</div></div><div class="detail-list">${ORDER.map((id) => {
+  const detailOrder = layer === 'overall' ? ORDER : [layer, ...ORDER.filter((id) => id !== layer)];
+  const countRadius = rawGrid.metadata?.countRadius ?? settings.countRadius;
+  $('#detail-card').innerHTML = `<div class="detail-top"><div class="detail-label"><span>网格 ${escape(p.id)}</span><button id="close-detail" aria-label="收起网格详情">收起 ↗</button></div><div class="detail-score-line"><div class="detail-score">${score === null ? '—' : score.toFixed(1)}<small>/100</small></div><div class="score-verdict"><strong>${verdict}</strong><span>${layer === 'overall' ? '综合便利度评分' : `${CATEGORY[layer].label}分项评分`}</span></div></div><div class="detail-coordinates">${p.center[0].toFixed(5)}° E &nbsp; ${p.center[1].toFixed(5)}° N · ${computedGridSize} m 网格</div><div class="detail-model">距离 ${100 - settings.quantityWeight}% + 数量 ${settings.quantityWeight}% <span>· ${distanceText(countRadius)} 半径</span></div></div><div class="detail-list">${detailOrder.map((id) => {
     const nearest = p.distances[id];
     const categoryScore = p.scores[id];
-    return `<button class="facility-detail" data-detail-category="${id}" style="--category-color:${CATEGORY[id].color}" title="查看${CATEGORY[id].label}的直线连接">${icon(id)}<div class="facility-body"><div class="facility-title"><span>${id === 'metro' ? '地铁入口' : CATEGORY[id].label}</span><strong>${nearest ? escape(distanceText(nearest.distance)) : '—'}</strong></div><div class="facility-name">${nearest ? escape(nearest.name) : '该类别暂无记录'}${settings.weights[id] === 0 ? ' · 未计入总分' : ''}</div><div class="mini-progress"><span style="width:${categoryScore ?? 0}%"></span></div></div></button>`;
-  }).join('')}</div><div class="detail-bottom"><span>ⓘ</span><span>已收录设施中的最近点。直线距离不计跨江绕行，开放数据收录可能不完整。</span></div>`;
+    const count = p.nearbyCounts?.[id];
+    const dScore = p.distanceScores?.[id];
+    const qScore = p.quantityScores?.[id];
+    const nearby = count === null || count === undefined ? '数量未知' : `${count}${id === 'metro' ? '站' : '处'}`;
+    return `<button class="facility-detail${id === layer ? ' focused-facility' : ''}" data-detail-category="${id}" style="--category-color:${CATEGORY[id].color}" title="查看${CATEGORY[id].label}的最近直线连接">${icon(id)}<div class="facility-body"><div class="facility-title"><span>${CATEGORY[id].label}</span><strong>${nearest ? escape(distanceText(nearest.distance)) : '—'}</strong></div><div class="facility-name">${nearest ? escape(nearest.name) : '该类别暂无记录'}${settings.weights[id] === 0 ? ' · 未计入总分' : ''}</div><div class="facility-metrics"><span>${distanceText(countRadius)} 内 <b>${nearby}</b></span><span>距 ${dScore == null ? '—' : Math.round(dScore)} · 量 ${qScore == null ? '—' : Math.round(qScore)}</span></div><div class="mini-progress"><span style="width:${categoryScore ?? 0}%"></span></div></div></button>`;
+  }).join('')}</div><div class="detail-bottom"><span>ⓘ</span><span>基于已收录设施。地铁按站点、运动设施按场馆尽量去重；未关联记录仍可能重复，直线距离不计绕行。</span></div>`;
   $('#detail-card').hidden = false;
   $('#detail-card .detail-score').style.color = colorScale.color(score);
   $('#close-detail').addEventListener('click', () => { $('#detail-card').hidden = true; selectedId = null; renderGrid(); drawConnections(null); });
@@ -314,7 +335,8 @@ async function analyze({ fit = true } = {}) {
   setBusy(true);
   try {
     const gridSize = settings.gridSize;
-    const { grid, elapsed } = await callWorker('calculate', { bbox, gridSize });
+    const countRadius = settings.countRadius;
+    const { grid, elapsed } = await callWorker('calculate', { bbox, gridSize, countRadius });
     if (version !== analysisVersion) return;
     if (!grid.features.length) { toast('范围内没有可分析的陆地中心点，请移动或扩大区域。'); return; }
     rawGrid = grid;
@@ -328,7 +350,7 @@ async function analyze({ fit = true } = {}) {
       return !best || d < best.d ? { f, d } : best;
     }, null);
     if (chosen) selectCell(chosen.f.properties.id);
-    $('#status-text').textContent = `${number(grid.features.length)} 个网格 · ${gridSize} m · 本地计算 ${Math.max(1, Math.round(elapsed))} ms`;
+    $('#status-text').textContent = `${number(grid.features.length)} 格 · ${gridSize} m 网格 · ${distanceText(countRadius)} 数量半径 · ${Math.max(1, Math.round(elapsed))} ms`;
     if (fit) fitArea();
     $('#settings-panel').classList.remove('open');
   } catch (error) {
@@ -373,6 +395,18 @@ function searchPois() {
   }));
 }
 function setupEvents() {
+  $('#quantity-weight').addEventListener('input', (event) => {
+    settings.quantityWeight = Number(event.target.value);
+    updateQuantityControls();
+    clearTimeout(scoreTimer);
+    scoreTimer = setTimeout(rescore, 65);
+  });
+  $$('[data-count-radius]').forEach((button) => button.addEventListener('click', () => {
+    settings.countRadius = Number(button.dataset.countRadius);
+    updateQuantityControls();
+    persistSettings();
+    analyze({ fit: false });
+  }));
   $$('[data-color-mode]').forEach((button) => button.addEventListener('click', () => {
     colorMode = button.dataset.colorMode;
     refreshColors();
@@ -419,20 +453,20 @@ function setupEvents() {
   $('#close-about').addEventListener('click', () => $('#about-dialog').close());
   $('#threshold-button').addEventListener('click', () => {
     $('#threshold-error').textContent = '';
-    $('#threshold-fields').innerHTML = ORDER.map((id) => `<div class="threshold-row"><span>${icon(id)}${CATEGORY[id].label}</span><label><span class="visually-hidden">${CATEGORY[id].label}满分距离</span><input id="good-${id}" type="number" min="0" max="100000" step="50" value="${settings.thresholds[id].good}"></label><label><span class="visually-hidden">${CATEGORY[id].label}零分距离</span><input id="max-${id}" type="number" min="1" max="200000" step="50" value="${settings.thresholds[id].max}"></label></div>`).join('');
+    $('#threshold-fields').innerHTML = ORDER.map((id) => `<div class="threshold-row"><span>${icon(id)}${CATEGORY[id].label}</span><label><span class="visually-hidden">${CATEGORY[id].label}满分距离</span><input id="good-${id}" type="number" min="0" max="100000" step="50" value="${settings.thresholds[id].good}"></label><label><span class="visually-hidden">${CATEGORY[id].label}零分距离</span><input id="max-${id}" type="number" min="1" max="200000" step="50" value="${settings.thresholds[id].max}"></label><label><span class="visually-hidden">${CATEGORY[id].label}数量目标</span><input id="target-${id}" type="number" min="1" max="100" step="1" value="${settings.thresholds[id].targetCount}"></label></div>`).join('');
     $('#threshold-dialog').showModal();
   });
   $('#save-thresholds').addEventListener('click', () => {
-    const thresholds = Object.fromEntries(ORDER.map((id) => [id, { good: Number($(`#good-${id}`).value), max: Number($(`#max-${id}`).value) }]));
-    if (ORDER.some((id) => !$(`#good-${id}`).value || !$(`#max-${id}`).value || !Number.isFinite(thresholds[id].good) || thresholds[id].good < 0 || !Number.isFinite(thresholds[id].max) || thresholds[id].max <= thresholds[id].good)) {
-      $('#threshold-error').textContent = '请填写有效距离：满分距离不小于 0，零分距离必须大于满分距离。';
+    const thresholds = Object.fromEntries(ORDER.map((id) => [id, { good: Number($(`#good-${id}`).value), max: Number($(`#max-${id}`).value), targetCount: Number($(`#target-${id}`).value) }]));
+    if (ORDER.some((id) => !$(`#good-${id}`).value || !$(`#max-${id}`).value || !Number.isFinite(thresholds[id].good) || thresholds[id].good < 0 || !Number.isFinite(thresholds[id].max) || thresholds[id].max <= thresholds[id].good || !Number.isInteger(thresholds[id].targetCount) || thresholds[id].targetCount < 1 || thresholds[id].targetCount > 100)) {
+      $('#threshold-error').textContent = '满分距离不小于 0，零分距离须更大；数量目标须为 1–100 的整数。';
       return;
     }
     settings.thresholds = thresholds;
     renderWeightControls();
     rescore();
     $('#threshold-dialog').close();
-    toast('评分阈值已更新，使用已有距离重新评分。');
+    toast('距离阈值与数量目标已更新，使用已有数据重新评分。');
   });
   $('#export-button').addEventListener('click', () => {
     if (!scoredGrid.features.length) return toast('请先计算一个区域。');
@@ -457,7 +491,7 @@ async function importData(event) {
   try {
     const fc = JSON.parse(await file.text());
     if (fc.type !== 'FeatureCollection' || !Array.isArray(fc.features) || fc.features.length > 100000) throw new Error('请导入不超过 10 万条设施的 GeoJSON FeatureCollection。');
-    const valid = fc.features.filter((f) => f.geometry?.type === 'Point' && CATEGORY[f.properties?.category] && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2 && f.geometry.coordinates.slice(0, 2).every(Number.isFinite) && Math.abs(f.geometry.coordinates[0]) <= 180 && Math.abs(f.geometry.coordinates[1]) <= 90);
+    const valid = fc.features.filter((f) => f?.geometry?.type === 'Point' && Object.hasOwn(CATEGORY, f.properties?.category) && Array.isArray(f.geometry.coordinates) && f.geometry.coordinates.length >= 2 && f.geometry.coordinates.slice(0, 2).every(Number.isFinite) && Math.abs(f.geometry.coordinates[0]) <= 180 && Math.abs(f.geometry.coordinates[1]) <= 90);
     if (!valid.length) throw new Error('未找到有效设施点，请检查 category 和经纬度。');
     const imported = { type: 'FeatureCollection', features: valid, metadata: { source: `用户导入：${file.name}`, dataDate: null } };
     setBusy(true, '读取本地设施数据');
@@ -476,7 +510,7 @@ async function importData(event) {
     $('#status-text').textContent = '已载入新设施数据，请计算所选区域';
     renderGrid();
     drawConnections(null);
-    renderDataInfo(result.counts);
+    renderDataInfo(result.counts, result.groupCounts);
     if (mapReady) map.getSource('pois').setData(pois);
     $('#about-dialog').close();
     toast(`已载入 ${number(valid.length)} 条设施，忽略 ${number(fc.features.length - valid.length)} 条无效记录。原始文件不会上传。`);
@@ -484,11 +518,13 @@ async function importData(event) {
   } catch (error) { toast(`导入失败：${error.message}`); }
   finally { event.target.value = ''; setBusy(false); }
 }
-function renderDataInfo(counts) {
+function renderDataInfo(counts, groupCounts = {}) {
   const count = Object.values(counts).reduce((a, b) => a + b, 0);
   $('#poi-count').textContent = number(count);
   $('#data-description').textContent = metadata.dataDate ? `设施、边界和水面来自 Geofabrik 的上海 OpenStreetMap 快照，截至 ${metadata.dataDate.slice(0, 10)}。共 ${number(count)} 条设施记录，数据按 ODbL 许可使用。下载范围包含部分边界缓冲，但不保证所有边界外设施。` : `${metadata.source}。共 ${number(count)} 条有效记录；请自行确认数据日期与覆盖范围。分析仍限制在上海主要陆域。`;
-  $('#data-counts').innerHTML = ORDER.map((id) => `<div>${id === 'metro' ? '地铁入口' : CATEGORY[id].label}<strong>${number(counts[id] || 0)}</strong></div>`).join('');
+  $('#data-counts').innerHTML = ORDER.map((id) => `<div>${CATEGORY[id].label}<strong>${number(groupCounts[id] ?? counts[id] ?? 0)}</strong><small>${number(counts[id] || 0)} 条设施点记录</small></div>`).join('');
+  const grouping = metadata.grouping;
+  $('#grouping-description').textContent = grouping ? '设施数量根据同一来源的分组信息去重：地铁入口优先按站点关系合并，缺关系时使用附近站点推断；同一运动场馆内部的子设施尽量合并。尚未关联的记录仍可能重复计数。' : '计数按数据中的 groupId 去重，缺少分组时按设施 ID 区分。用户导入数据可提供相同 groupId 合并同一站点入口或同一场馆子设施。';
 }
 async function loadData() {
   try {
@@ -503,7 +539,7 @@ async function loadData() {
     metadata = meta;
     const result = await callWorker('init', { pois, boundary, water });
     dataReady = true;
-    renderDataInfo(result.counts);
+    renderDataInfo(result.counts, result.groupCounts);
     if (mapReady) { map.getSource('pois').setData(pois); map.getSource('boundary').setData(boundary); }
     await analyze();
   } catch (error) {

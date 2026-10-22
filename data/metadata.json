@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "source": "OpenStreetMap contributors / Geofabrik Shanghai extract",
   "sourceUrl": "https://download.geofabrik.de/asia/china/shanghai.html",
   "downloadUrl": "https://download.geofabrik.de/asia/china/shanghai-latest.osm.pbf",
@@ -7,7 +8,7 @@
   "attribution": "© OpenStreetMap contributors",
   "coordinateSystem": "WGS84 (EPSG:4326)",
   "downloadedAt": "2026-10-22T13:09:02.912420Z",
-  "generatedAt": "2026-10-22T13:13:33.304054Z",
+  "generatedAt": "2026-10-22T16:23:06.356088Z",
   "dataDate": "2026-10-20T20:23:47Z",
   "coverageBBox": [
     120.847,
@@ -20,11 +21,95 @@
     "cafe": 1634,
     "mall": 540,
     "school": 2275,
-    "metro": 1493
+    "metro": 1493,
+    "sports": 3614,
+    "library": 131
   },
-  "totalCount": 5942,
+  "groupCounts": {
+    "cafe": 1634,
+    "mall": 540,
+    "school": 2275,
+    "metro": 370,
+    "sports": 3436,
+    "library": 131
+  },
+  "totalGroupCount": 8386,
+  "totalCount": 9687,
   "sourceSha256": "902fd6aedf1fc56fee203874a7fc8339876381288a7a213e00442493fd7b0291",
-  "removedDuplicateNodeCount": 9,
+  "removedDuplicateNodeCount": 10,
+  "removedDuplicateObjectCount": 0,
+  "grouping": {
+    "countingRule": "For each category, count unique properties.groupId within the requested radius; use minimum member distance for each group.",
+    "idStability": "IDs use source OSM object IDs. Stable for the same OSM objects and grouping snapshot; changes to OSM membership can change a group.",
+    "methodsByCategory": {
+      "cafe": {
+        "individual_osm_object": 1634
+      },
+      "mall": {
+        "individual_osm_object": 540
+      },
+      "school": {
+        "individual_osm_object": 2275
+      },
+      "metro": {
+        "osm_stop_area_membership": 1484,
+        "nearest_metro_station_within_350m": 9
+      },
+      "sports": {
+        "individual_osm_object": 3217,
+        "contained_in_sports_venue": 178,
+        "sports_venue": 219
+      },
+      "library": {
+        "individual_osm_object": 131
+      }
+    },
+    "metro": {
+      "entranceCount": 1493,
+      "mappedMetroStationObjectCount": 626,
+      "validMetroStopAreaCount": 524,
+      "validMetroStopAreaGroupCount": 84,
+      "sameNamedStationPairsMergedWithin350m": 143,
+      "entrancesByGroupingMethod": {
+        "osm_stop_area_membership": 1484,
+        "nearest_metro_station_within_350m": 9
+      },
+      "associatedEntranceCount": 1493,
+      "unassociatedEntranceCount": 0,
+      "unassociatedEntranceIds": [],
+      "heuristicMaxDistanceM": 350,
+      "largestObservedHeuristicDistanceM": 168.363,
+      "heuristicDistanceValidationErrors": []
+    },
+    "sports": {
+      "containedMembersChecked": 178,
+      "containmentErrors": 0,
+      "excludedInsideRestrictedSportArea": 0
+    }
+  },
+  "accessFiltering": {
+    "categories": [
+      "sports",
+      "library"
+    ],
+    "excludedExplicitAccess": {
+      "sports": 32,
+      "library": 0
+    },
+    "excludedAccessValues": [
+      "no",
+      "private"
+    ],
+    "sportsWithinRestrictedAreaExcluded": 0,
+    "retainedConditionalAccessCounts": {
+      "sports": {
+        "customers": 16,
+        "permit": 1
+      },
+      "library": {}
+    },
+    "limitation": "Missing access tags do not establish public access. School/campus/residential access is not inferred. Original four category filters are unchanged."
+  },
   "geometryErrors": {},
   "categories": {
     "cafe": {
@@ -42,13 +127,39 @@
     "metro": {
       "label": "地铁入口",
       "osmFilter": "railway=subway_entrance"
+    },
+    "sports": {
+      "label": "运动设施",
+      "osmFilter": "leisure IN (fitness_centre, fitness_station, pitch, sports_centre, sports_hall, stadium, swimming_pool, track); excludes access=no/private",
+      "parentVenueTypes": [
+        "sports_centre",
+        "sports_hall",
+        "stadium"
+      ]
+    },
+    "library": {
+      "label": "图书馆",
+      "osmFilter": "amenity=library; excludes access=no/private"
     }
   },
+  "tagDocumentation": [
+    "https://wiki.openstreetmap.org/wiki/Tag:amenity=library",
+    "https://wiki.openstreetmap.org/wiki/Tag:leisure=sports_centre",
+    "https://wiki.openstreetmap.org/wiki/Tag:leisure=fitness_centre",
+    "https://wiki.openstreetmap.org/wiki/Tag:leisure=fitness_station",
+    "https://wiki.openstreetmap.org/wiki/Tag:leisure=pitch",
+    "https://wiki.openstreetmap.org/wiki/Tag:public_transport=stop_area",
+    "https://wiki.openstreetmap.org/wiki/Tag:railway=subway_entrance",
+    "https://wiki.openstreetmap.org/wiki/Key:access"
+  ],
   "limitations": [
     "OSM volunteer coverage is incomplete and uneven. Counts are mapped objects, not a complete facilities census.",
     "Distances are straight-line geographic distances; rivers, walls, entrances and walking access are not modeled.",
     "Polygon facilities use an interior representative point, not a surveyed entrance.",
-    "Metro features are individually mapped subway entrances; multiple entrances of one station are retained.",
+    "Metro entrance points are retained for distance; counts deduplicate explicit stop-area groups and bounded station associations. Unassociated entrances remain separate groups and may overcount stations.",
+    "Metro nearest-station fallback and same-named station merges are geographic heuristics bounded to 350 m per association, not verified pedestrian links; nearby stations may be misassigned.",
+    "Sports counts collapse mapped child facilities only when their complete geometry lies inside a mapped sports_centre, sports_hall or stadium polygon. Missing venue boundaries can still overcount adjacent courts.",
+    "Sports/library access=no/private objects are removed; missing access tags, customer/member limits, campus access and opening times prevent a guarantee of public availability.",
     "A same-named POI node inside a mapped facility polygon is removed; other potential duplicates may remain.",
     "The extract has a border buffer and does not guarantee all facilities beyond the Shanghai boundary.",
     "School tags do not establish school quality, catchment, enrollment eligibility or public access."

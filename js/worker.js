@@ -9,7 +9,7 @@ self.onmessage = ({ data: { id, type, payload } }) => {
       index = buildPoiIndex(payload.pois);
       boundary = payload.boundary;
       water = payload.water;
-      self.postMessage({ id, result: { counts: index.counts, skipped: index.skipped } });
+      self.postMessage({ id, result: { counts: index.counts, groupCounts: index.groupCounts, skipped: index.skipped } });
     } else if (type === 'calculate') {
       if (!index) throw new Error('设施数据尚未读取完成。');
       const start = performance.now();

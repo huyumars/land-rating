@@ -6,16 +6,20 @@ const X_METERS_PER_DEGREE = EARTH_RADIUS_METERS * DEG_TO_RAD * Math.cos(REFERENC
 const Y_METERS_PER_DEGREE = EARTH_RADIUS_METERS * DEG_TO_RAD;
 
 export const CATEGORIES = Object.freeze([
-  Object.freeze({ id: 'cafe', label: '咖啡店', color: '#d49657', defaultWeight: 15, good: 200, max: 1500 }),
-  Object.freeze({ id: 'mall', label: '商场', color: '#b586b8', defaultWeight: 20, good: 500, max: 3000 }),
-  Object.freeze({ id: 'school', label: '学校', color: '#62a69a', defaultWeight: 25, good: 500, max: 2500 }),
-  Object.freeze({ id: 'metro', label: '地铁', color: '#6797cf', defaultWeight: 40, good: 300, max: 2000 }),
+  Object.freeze({ id: 'cafe', label: '咖啡店', color: '#d49657', defaultWeight: 10, good: 200, max: 1500, targetCount: 5 }),
+  Object.freeze({ id: 'mall', label: '商场', color: '#b586b8', defaultWeight: 15, good: 500, max: 3000, targetCount: 3 }),
+  Object.freeze({ id: 'school', label: '学校', color: '#62a69a', defaultWeight: 20, good: 500, max: 2500, targetCount: 3 }),
+  Object.freeze({ id: 'metro', label: '地铁', color: '#6797cf', defaultWeight: 30, good: 300, max: 2000, targetCount: 3 }),
+  Object.freeze({ id: 'sports', label: '运动设施', color: '#de7c67', defaultWeight: 15, good: 300, max: 2000, targetCount: 5 }),
+  Object.freeze({ id: 'library', label: '图书馆', color: '#8c7bc0', defaultWeight: 10, good: 500, max: 3000, targetCount: 2 }),
 ]);
 
 export const DEFAULT_SETTINGS = Object.freeze({
   gridSize: 250,
+  quantityWeight: 30,
+  countRadius: 1000,
   weights: Object.freeze(Object.fromEntries(CATEGORIES.map((category) => [category.id, category.defaultWeight]))),
-  thresholds: Object.freeze(Object.fromEntries(CATEGORIES.map((category) => [category.id, Object.freeze({ good: category.good, max: category.max })]))),
+  thresholds: Object.freeze(Object.fromEntries(CATEGORIES.map((category) => [category.id, Object.freeze({ good: category.good, max: category.max, targetCount: category.targetCount })]))),
 });
 
 const CATEGORY_IDS = CATEGORIES.map((category) => category.id);
@@ -71,7 +75,9 @@ export function buildPoiIndex(featureCollection) {
     throw new TypeError('设施数据必须是 GeoJSON FeatureCollection。');
   }
   const grouped = Object.fromEntries(CATEGORY_IDS.map((id) => [id, []]));
+  const seenIds = new Set();
   let skipped = 0;
+  let duplicates = 0;
   featureCollection.features.forEach((feature, position) => {
     const coordinates = feature?.geometry?.coordinates;
     const category = feature?.properties?.category;
@@ -80,8 +86,16 @@ export function buildPoiIndex(featureCollection) {
       return;
     }
     const pointCoordinates = coordinates.slice(0, 2);
+    const poiId = String(feature.id ?? feature.properties.id ?? `${category}:${position}`);
+    if (seenIds.has(poiId)) {
+      skipped += 1;
+      duplicates += 1;
+      return;
+    }
+    seenIds.add(poiId);
     grouped[category].push({
-      poiId: String(feature.id ?? feature.properties.id ?? `${category}:${position}`),
+      poiId,
+      groupId: String(feature.properties.groupId || feature.properties.facilityGroupId || poiId),
       name: String(feature.properties.name || CATEGORIES.find((entry) => entry.id === category).label),
       coordinates: pointCoordinates,
       unit: toUnitSphere(pointCoordinates),
@@ -89,8 +103,9 @@ export function buildPoiIndex(featureCollection) {
   });
   return {
     counts: Object.fromEntries(CATEGORY_IDS.map((id) => [id, grouped[id].length])),
+    groupCounts: Object.fromEntries(CATEGORY_IDS.map((id) => [id, new Set(grouped[id].map((point) => point.groupId)).size])),
     trees: Object.fromEntries(CATEGORY_IDS.map((id) => [id, buildKdTree(grouped[id])])),
-    skipped,
+    skipped, duplicates,
   };
 }
 
@@ -117,9 +132,38 @@ export function findNearest(index, category, coordinates) {
   return {
     distance: EARTH_RADIUS_METERS * 2 * Math.asin(Math.min(1, Math.sqrt(bestSquared) / 2)),
     poiId: best.poiId,
+    groupId: best.groupId,
     name: best.name,
     coordinates: [...best.coordinates],
   };
+}
+
+function validateRadius(radius) {
+  if (!Number.isFinite(radius) || radius < 0) throw new RangeError('统计半径必须为不小于 0 的有限米数。');
+}
+
+/** Count distinct facilities with at least one point inside the spherical radius. */
+export function countNearby(index, category, coordinates, radius = DEFAULT_SETTINGS.countRadius) {
+  if (!CATEGORY_IDS.includes(category)) throw new RangeError(`未知设施类别：${category}`);
+  if (!isCoordinate(coordinates)) throw new TypeError('坐标必须为有效的 [经度, 纬度]。');
+  validateRadius(radius);
+  const tree = index?.trees?.[category];
+  if (!tree) return null;
+  const query = toUnitSphere(coordinates);
+  const chord = 2 * Math.sin(Math.min(Math.PI, radius / EARTH_RADIUS_METERS) / 2);
+  // About one micrometer at the Earth's surface, to include exact edge points
+  // despite floating-point cancellation in unit-sphere coordinates.
+  const radiusSquared = (chord + (radius > 0 ? 1e-6 / EARTH_RADIUS_METERS : 0)) ** 2;
+  const facilities = new Set();
+  const visit = (node) => {
+    if (!node) return;
+    if (squaredDistance(query, node.point.unit) <= radiusSquared) facilities.add(node.point.groupId);
+    const delta = query[node.axis] - node.point.unit[node.axis];
+    visit(delta <= 0 ? node.left : node.right);
+    if (delta * delta <= radiusSquared) visit(delta <= 0 ? node.right : node.left);
+  };
+  visit(tree);
+  return facilities.size;
 }
 
 /** Great-circle surface distance in meters; no route or road assumption. */
@@ -187,11 +231,12 @@ function boundaryPredicate(boundary, emptyResult = true) {
     && point[1] >= bounds[1] && point[1] <= bounds[3] && inPolygon(point, rings));
 }
 
-export function calculateGrid({ bbox, gridSize = DEFAULT_SETTINGS.gridSize, index, categories = CATEGORY_IDS, boundary = null, excludeBoundary = null }) {
+export function calculateGrid({ bbox, gridSize = DEFAULT_SETTINGS.gridSize, countRadius = DEFAULT_SETTINGS.countRadius, index, categories = CATEGORY_IDS, boundary = null, excludeBoundary = null }) {
   if (!Array.isArray(bbox) || bbox.length !== 4 || !bbox.every(Number.isFinite)
     || !isCoordinate(bbox.slice(0, 2)) || !isCoordinate(bbox.slice(2, 4))
     || bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) throw new RangeError('分析范围必须为 [西, 南, 东, 北]，且范围不能为空。');
   if (!Number.isFinite(gridSize) || gridSize <= 0) throw new RangeError('网格边长必须大于 0 米。');
+  validateRadius(countRadius);
   if (!Array.isArray(categories) || categories.some((id) => !CATEGORY_IDS.includes(id))) throw new RangeError('分析类别无效。');
   const categoryIds = [...new Set(categories)];
   const [minX, minY] = project(bbox.slice(0, 2));
@@ -220,22 +265,27 @@ export function calculateGrid({ bbox, gridSize = DEFAULT_SETTINGS.gridSize, inde
         properties: {
           id, center,
           distances: Object.fromEntries(categoryIds.map((category) => [category, findNearest(index, category, center)])),
+          nearbyCounts: Object.fromEntries(categoryIds.map((category) => [category, countNearby(index, category, center, countRadius)])),
         },
       });
     }
   }
-  return { type: 'FeatureCollection', features, metadata: { bbox: [...bbox], gridSize, categories: categoryIds, projection: 'local-equirectangular-31.23', boundaryMode: 'center' } };
+  return { type: 'FeatureCollection', features, metadata: { bbox: [...bbox], gridSize, countRadius, categories: categoryIds, projection: 'local-equirectangular-31.23', boundaryMode: 'center' } };
 }
 
 export function validateSettings(settings = {}) {
+  const normalized = { ...DEFAULT_SETTINGS, ...settings };
+  if (!Number.isFinite(normalized.quantityWeight) || normalized.quantityWeight < 0 || normalized.quantityWeight > 100) throw new RangeError('数量分权重必须为 0–100 的百分比。');
+  validateRadius(normalized.countRadius);
   const weights = { ...DEFAULT_SETTINGS.weights, ...settings.weights };
   const thresholds = Object.fromEntries(CATEGORY_IDS.map((id) => [id, { ...DEFAULT_SETTINGS.thresholds[id], ...settings.thresholds?.[id] }]));
   for (const id of CATEGORY_IDS) {
     if (!Number.isFinite(weights[id]) || weights[id] < 0) throw new RangeError(`${id} 权重必须为非负数。`);
-    const { good, max } = thresholds[id];
+    const { good, max, targetCount } = thresholds[id];
     if (!Number.isFinite(good) || !Number.isFinite(max) || good < 0 || max <= good) throw new RangeError(`${id} 的满分距离须不小于 0，零分距离须大于满分距离。`);
+    if (!Number.isSafeInteger(targetCount) || targetCount < 1) throw new RangeError(`${id} 的满分设施数量必须为至少 1 的整数。`);
   }
-  return { ...DEFAULT_SETTINGS, ...settings, weights, thresholds };
+  return { ...normalized, weights, thresholds };
 }
 
 function categoryScore(distance, { good, max }) {
@@ -248,14 +298,27 @@ function categoryScore(distance, { good, max }) {
 /** Rescoring never changes the input grid or repeats distance calculations. */
 export function scoreGrid(grid, settings = DEFAULT_SETTINGS) {
   const normalized = validateSettings(settings);
+  const quantityWeight = normalized.quantityWeight / 100;
+  const radiusMatches = grid.metadata?.countRadius === undefined || grid.metadata.countRadius === normalized.countRadius;
   const activeCategories = CATEGORY_IDS.filter((id) => normalized.weights[id] > 0);
   const totalWeight = activeCategories.reduce((sum, id) => sum + normalized.weights[id], 0);
   return {
     ...grid,
-    metadata: { ...grid.metadata, scoring: { weights: normalized.weights, thresholds: normalized.thresholds } },
+    metadata: { ...grid.metadata, scoring: { weights: normalized.weights, thresholds: normalized.thresholds, quantityWeight: normalized.quantityWeight, countRadius: normalized.countRadius } },
     features: grid.features.map((feature) => {
       const distances = feature.properties.distances ?? {};
-      const scores = Object.fromEntries(CATEGORY_IDS.map((id) => [id, categoryScore(distances[id]?.distance, normalized.thresholds[id])]));
+      const nearbyCounts = feature.properties.nearbyCounts ?? {};
+      const distanceScores = Object.fromEntries(CATEGORY_IDS.map((id) => [id, categoryScore(distances[id]?.distance, normalized.thresholds[id])]));
+      const quantityScores = Object.fromEntries(CATEGORY_IDS.map((id) => [id,
+        radiusMatches && Number.isSafeInteger(nearbyCounts[id]) && nearbyCounts[id] >= 0
+          ? Math.min(nearbyCounts[id] / normalized.thresholds[id].targetCount, 1) * 100 : null,
+      ]));
+      const scores = Object.fromEntries(CATEGORY_IDS.map((id) => {
+        if (quantityWeight === 0) return [id, distanceScores[id]];
+        if (quantityWeight === 1) return [id, quantityScores[id]];
+        if (distanceScores[id] === null || quantityScores[id] === null) return [id, null];
+        return [id, distanceScores[id] * (1 - quantityWeight) + quantityScores[id] * quantityWeight];
+      }));
       const validCategories = activeCategories.filter((id) => scores[id] !== null);
       const missingCategories = activeCategories.filter((id) => scores[id] === null);
       const validWeight = validCategories.reduce((sum, id) => sum + normalized.weights[id], 0);
@@ -266,7 +329,7 @@ export function scoreGrid(grid, settings = DEFAULT_SETTINGS) {
         properties: {
           ...feature.properties,
           score: totalWeight > 0 && missingCategories.length === 0 ? partialScore : null,
-          partialScore, scores, validCategories, missingCategories,
+          partialScore, scores, distanceScores, quantityScores, validCategories, missingCategories,
           coverage: totalWeight > 0 ? validWeight / totalWeight : 0,
         },
       };
@@ -283,13 +346,13 @@ function csvValue(value) {
 }
 
 export function gridToCsv(grid, { bom = true } = {}) {
-  const columns = ['cell_id', 'longitude', 'latitude', 'score', 'partial_score', 'coverage', ...CATEGORY_IDS.flatMap((id) => [`${id}_distance_m`, `${id}_name`, `${id}_poi_id`])];
+  const columns = ['cell_id', 'longitude', 'latitude', 'score', 'partial_score', 'coverage', 'count_radius_m', 'quantity_weight_pct', ...CATEGORY_IDS.flatMap((id) => [`${id}_distance_m`, `${id}_name`, `${id}_poi_id`, `${id}_nearby_count`, `${id}_distance_score`, `${id}_quantity_score`])];
   const rows = grid.features.map(({ properties }) => {
     const coordinates = properties.center ?? [];
-    return [properties.id, coordinates[0], coordinates[1], properties.score, properties.partialScore, properties.coverage,
+    return [properties.id, coordinates[0], coordinates[1], properties.score, properties.partialScore, properties.coverage, grid.metadata?.countRadius, grid.metadata?.scoring?.quantityWeight,
       ...CATEGORY_IDS.flatMap((id) => {
         const nearest = properties.distances?.[id];
-        return [nearest ? Math.round(nearest.distance) : null, nearest?.name, nearest?.poiId];
+        return [nearest ? Math.round(nearest.distance) : null, nearest?.name, nearest?.poiId, properties.nearbyCounts?.[id], properties.distanceScores?.[id], properties.quantityScores?.[id]];
       })];
   });
   return `${bom ? '\uFEFF' : ''}${[columns, ...rows].map((row) => row.map(csvValue).join(',')).join('\r\n')}\r\n`;
