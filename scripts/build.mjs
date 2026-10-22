@@ -1,0 +1,13 @@
+import { cp, mkdir, readFile, rm, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const destination = path.join(root, 'dist');
+const required = ['index.html', 'styles.css', 'favicon.svg', 'js', 'vendor', 'data'];
+for (const file of required) await stat(path.join(root, file));
+const pois = JSON.parse(await readFile(path.join(root, 'data/pois.geojson'), 'utf8'));
+if (pois.type !== 'FeatureCollection' || !pois.features.length) throw new Error('缺少真实设施数据。');
+await rm(destination, { recursive: true, force: true });
+await mkdir(destination, { recursive: true });
+for (const file of required) await cp(path.join(root, file), path.join(destination, file), { recursive: true });
+console.log(`Built static MVP: ${pois.features.length} real POIs, no runtime build dependencies. Output: dist/`);

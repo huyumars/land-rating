@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f7f4">
+  <meta name="description" content="探索上海的生活便利度。基于真实开放设施数据，以直线距离对网格评分，在本地反复调整参数。">
+  <title>沪上邻里 · 生活便利度地图</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./vendor/maplibre-gl.css">
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./vendor/maplibre-gl.js"></script>
+  <script type="module" src="./js/app.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="./" aria-label="沪上邻里首页">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M4 4h10v10H4zM18 4h10v10H18zM4 18h10v10H4z" fill="currentColor"/><path d="M18 18h10v10H18z" fill="#c6d9a6"/></svg></span>
+      <span><strong>沪上邻里<span class="brand-dot">.</span></strong><small>SHANGHAI NEIGHBORHOOD LAB</small></span>
+    </a>
+    <nav class="main-nav" aria-label="主导航"><span class="nav-active">便利度地图</span><button id="about-button">数据与方法 <span aria-hidden="true">↗</span></button></nav>
+    <div class="header-end"><span class="live-dot"></span><span>开放数据 · 免费探索</span><button class="icon-button mobile-settings" id="mobile-settings" aria-label="显示分析设置">☷</button></div>
+  </header>
+
+  <div class="app-layout">
+    <aside class="settings-panel" id="settings-panel" aria-label="分析设置">
+      <div class="panel-heading"><div><span class="eyebrow">MAKE IT YOUR NEIGHBORHOOD</span><h1>定义你的生活半径</h1></div><button class="text-button" id="reset-button">重置</button></div>
+      <div class="settings-scroll">
+      <section class="setting-section">
+        <div class="section-label"><span class="step">01</span><h2>选择分析区域</h2></div>
+        <label class="visually-hidden" for="region-select">分析区域</label>
+        <select id="region-select"><option value="central">上海中心城区</option><option value="xuhui">徐汇 · 衡复周边</option><option value="jingan">静安 · 南京西路周边</option><option value="pudong">浦东 · 陆家嘴周边</option><option value="all">上海主要陆域（默认 1 km）</option><option value="viewport">当前地图视野</option></select>
+        <div class="field-heading"><span>网格边长</span><span id="grid-size-caption">250 × 250 m</span></div>
+        <div class="segmented" id="grid-size-control" aria-label="网格边长"><button data-size="100">100 m</button><button data-size="250" class="active" aria-pressed="true">250 m</button><button data-size="500">500 m</button><button data-size="1000">1 km</button></div>
+        <p class="field-help">网格越小，观察越细。每格以中心点采样。</p>
+      </section>
+
+      <section class="setting-section weights-section">
+        <div class="section-label"><span class="step">02</span><h2>什么对你更重要</h2><span class="tiny-badge">自动归一</span></div>
+        <div class="weight-presets" aria-label="权重预设"><button data-preset="balanced" class="active">日常均衡</button><button data-preset="commute">通勤优先</button><button data-preset="family">家庭生活</button></div>
+        <div id="weight-controls"></div>
+      </section>
+
+      <section class="setting-section compact-section">
+        <div class="section-label"><span class="step">03</span><h2>距离与评分</h2><button id="threshold-button" class="text-button">调整阈值</button></div>
+        <div class="distance-mode"><span class="mode-icon" aria-hidden="true">↗</span><div><strong>直线距离</strong><p>从网格中心到已收录设施点</p></div><span class="check-mark" aria-hidden="true">✓</span></div>
+      </section>
+
+      <div class="local-note"><span class="local-note-icon" aria-hidden="true">⌘</span><div><strong>数据一次载入，参数随你调整</strong><p>评分在本地完成，无距离接口调用费。底图加载需要网络。</p></div></div>
+      <div class="sidebar-bottom"><button class="text-button" id="source-button">查看数据来源与覆盖 <span aria-hidden="true">↗</span></button><span>MVP 0.1</span></div>
+      </div>
+      <div class="settings-footer"><button class="primary-button" id="analyze-button"><span aria-hidden="true">▦</span> 计算所选区域 <span aria-hidden="true">→</span></button></div>
+    </aside>
+
+    <main class="workspace">
+      <section class="workspace-heading"><div><div class="workspace-eyebrow"><span>SHANGHAI</span><i></i><span>城市生活观察</span></div><h2>每一格，发现日常的便利<span>。</span></h2></div><div class="summary-stats"><div><span>已收录设施</span><strong id="poi-count">—</strong></div><div><span>分析网格</span><strong id="cell-count">—</strong></div><div><span>区域平均分</span><strong id="average-score">—</strong></div></div></section>
+      <section class="map-workspace" aria-label="上海便利度地图">
+        <div id="map" role="region" aria-label="可拖动缩放的上海评分地图"></div>
+        <div class="map-toolbar"><div class="layer-tabs" id="layer-tabs" aria-label="评分图层"><button data-layer="overall" class="active" aria-pressed="true">综合评分</button><button data-layer="metro">地铁</button><button data-layer="school">学校</button><button data-layer="mall">商场</button><button data-layer="cafe">咖啡</button></div><div class="map-search"><span aria-hidden="true">⌕</span><label class="visually-hidden" for="poi-search">搜索已收录设施</label><input id="poi-search" placeholder="搜索已收录设施" autocomplete="off"><kbd>/</kbd><div id="search-results" class="search-results" hidden></div></div></div>
+        <div class="map-status" id="map-status"><span class="live-dot"></span><span id="status-text">正在读取上海设施数据…</span></div>
+        <div class="map-options"><label><input id="show-pois" type="checkbox"><span>显示设施点</span></label><button id="fit-button" title="回到分析区域" aria-label="回到分析区域">⌖</button><button id="export-button" title="导出分析结果" aria-label="导出分析结果">↓</button></div>
+        <aside class="detail-card" id="detail-card" aria-label="选中网格详情"><div class="detail-empty"><div class="empty-grid" aria-hidden="true">▦</div><h3>从一格开始了解上海</h3><p>点击地图上的网格，查看附近设施、直线距离和评分明细。</p></div></aside>
+        <div class="map-legend"><div class="legend-heading"><strong id="legend-title">综合便利度</strong><span>0—100 分</span></div><div class="legend-gradient"></div><div class="legend-ticks"><span>较远</span><span>适中</span><span>较近</span></div><div class="legend-caption"><span class="no-data-swatch"></span> 缺少数据不计分 <span class="legend-separator">·</span> 直线距离</div></div>
+        <div id="map-error" class="map-error" hidden><strong>底图暂时无法连接</strong><p>设施与评分仍可本地计算。请检查网络后重试底图。</p><button id="retry-map" class="text-button">重新加载底图 ↗</button></div>
+        <div class="loading-overlay" id="loading-overlay"><div class="loading-box"><span class="spinner"></span><strong id="loading-label">读取上海开放数据</strong><span>本地计算，探索你的生活半径</span></div></div>
+        <div class="map-footnote">基于已收录 OSM 设施 · 非完整商户名录 · 直线距离不代表步行路程</div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="threshold-dialog"><form method="dialog"><div class="dialog-heading"><div><span class="eyebrow">SCORING MODEL</span><h2>让分数符合你的生活</h2></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></div><p class="dialog-intro">满分距离内得 100 分，超过零分距离得 0 分，中间线性递减。综合分按权重归一计算。</p><div class="threshold-table"><div class="threshold-header"><span>设施</span><span>满分距离 / 米</span><span>零分距离 / 米</span></div><div id="threshold-fields"></div></div><p id="threshold-error" class="form-error" role="alert"></p><div class="dialog-actions"><button value="cancel" class="secondary-button">取消</button><button id="save-thresholds" type="button" class="primary-button">应用并重新评分</button></div></form></dialog>
+
+  <dialog id="about-dialog"><div class="dialog-heading"><div><span class="eyebrow">OPEN DATA, CLEAR METHODS</span><h2>关于这张便利度地图</h2></div><button id="close-about" class="icon-button" aria-label="关闭数据说明">×</button></div><div class="about-body"><div class="about-callout">使用真实开放数据。分数反映已收录设施的接近程度，适合探索和比较。</div><h3>数据从哪里来</h3><p id="data-description">正在读取数据来源…</p><div id="data-counts" class="data-counts"></div><p>底图由 OpenFreeMap 提供，地图渲染使用 MapLibre。距离与评分在你的浏览器本地完成。内置分析数据不会因拖动地图、调整权重而重新下载。</p><h3>分数如何计算</h3><p>每个网格以中心点为代表，寻找每类已收录设施中的直线最近点。单项按距离线性打分，再按设施权重归一加权。缺少所选类别时标记数据不足，避免当作零分。水面中心网格会在已绘制水面范围内排除。</p><h3>理解数据的边界</h3><p>OSM 由社区维护，设施、出入口和属性可能遗漏或过时；“最近”仅针对已收录记录。学校为 school 标签，未区分学段；商场和学校缺少入口时使用设施内部代表点。直线距离不考虑过江、围墙与道路绕行。河道与行政边界也可能不完整。</p><h3>免注册，本地计算</h3><p>当前版本使用免费的 OSM 数据与 OpenFreeMap 底图，无需注册账号或配置 API Key。设施数据已随应用打包，可下载保存并在本地反复调整参数。底图由在线服务加载。</p><div class="about-links"><a href="https://download.geofabrik.de/asia/china/shanghai.html" target="_blank" rel="noopener">上海原始数据 ↗</a><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OSM / ODbL 许可 ↗</a></div><div class="about-downloads"><button id="download-pois" class="secondary-button">下载设施数据</button><button id="download-settings" class="secondary-button">导出当前参数</button><label class="secondary-button import-label" for="import-file">导入 GeoJSON</label><input id="import-file" type="file" accept=".geojson,.json,application/geo+json,application/json" hidden></div><p class="field-help">导入点数据需包含 properties.category：cafe、mall、school 或 metro，经纬度使用 WGS84。仅在本机处理；重载后恢复内置数据。</p></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

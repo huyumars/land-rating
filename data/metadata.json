@@ -1,0 +1,56 @@
+{
+  "source": "OpenStreetMap contributors / Geofabrik Shanghai extract",
+  "sourceUrl": "https://download.geofabrik.de/asia/china/shanghai.html",
+  "downloadUrl": "https://download.geofabrik.de/asia/china/shanghai-latest.osm.pbf",
+  "license": "ODbL-1.0",
+  "licenseUrl": "https://www.openstreetmap.org/copyright",
+  "attribution": "© OpenStreetMap contributors",
+  "coordinateSystem": "WGS84 (EPSG:4326)",
+  "downloadedAt": "2026-10-22T13:09:02.912420Z",
+  "generatedAt": "2026-10-22T13:13:33.304054Z",
+  "dataDate": "2026-10-20T20:23:47Z",
+  "coverageBBox": [
+    120.847,
+    30.6391,
+    123.679,
+    31.88455
+  ],
+  "coverageType": "Geofabrik Shanghai extract (includes a border buffer; not an administrative boundary)",
+  "counts": {
+    "cafe": 1634,
+    "mall": 540,
+    "school": 2275,
+    "metro": 1493
+  },
+  "totalCount": 5942,
+  "sourceSha256": "902fd6aedf1fc56fee203874a7fc8339876381288a7a213e00442493fd7b0291",
+  "removedDuplicateNodeCount": 9,
+  "geometryErrors": {},
+  "categories": {
+    "cafe": {
+      "label": "咖啡店",
+      "osmFilter": "amenity=cafe"
+    },
+    "mall": {
+      "label": "商场",
+      "osmFilter": "shop=mall"
+    },
+    "school": {
+      "label": "学校",
+      "osmFilter": "amenity=school (excludes kindergarten/university)"
+    },
+    "metro": {
+      "label": "地铁入口",
+      "osmFilter": "railway=subway_entrance"
+    }
+  },
+  "limitations": [
+    "OSM volunteer coverage is incomplete and uneven. Counts are mapped objects, not a complete facilities census.",
+    "Distances are straight-line geographic distances; rivers, walls, entrances and walking access are not modeled.",
+    "Polygon facilities use an interior representative point, not a surveyed entrance.",
+    "Metro features are individually mapped subway entrances; multiple entrances of one station are retained.",
+    "A same-named POI node inside a mapped facility polygon is removed; other potential duplicates may remain.",
+    "The extract has a border buffer and does not guarantee all facilities beyond the Shanghai boundary.",
+    "School tags do not establish school quality, catchment, enrollment eligibility or public access."
+  ]
+}

@@ -1,0 +1,68 @@
+# 沪上邻里 · 上海生活便利度 MVP
+
+基于真实 OpenStreetMap 上海设施快照，以网格中心到已收录设施点的球面直线距离评分。地图使用 MapLibre GL JS / OpenFreeMap；距离、空间检索和调参都在浏览器本地完成，无需高德账号或距离 API Key。
+
+## 本地运行
+
+需要 Node.js 20 或更高版本，不需要安装 npm 依赖：
+
+```sh
+cd /Users/mars/Project/land-rating/shanghai-access
+npm run dev
+```
+
+打开终端输出的 `http://127.0.0.1:4173/`。可用 `PORT=其他端口 npm run dev` 修改端口。
+
+```sh
+npm test
+npm run build
+```
+
+`dist/` 为可部署的纯静态网站。Web Worker 需要通过 HTTP/HTTPS 打开，不能直接双击 HTML。在线底图需要网络；评分数据和 MapLibre 代码已随应用打包，不使用公共 OSM 瓦片服务器批量下载。
+
+## 已实现
+
+- 上海中心城区、徐汇、静安、浦东、主要陆域和当前地图视野分析。
+- 固定位置的 100 / 250 / 500 / 1000 米网格；按上海边界中心过滤，并排除已绘制水面中的中心点。
+- 地铁入口、学校、商场、咖啡店的最近距离、分项评分与综合评分。
+- 权重滑杆、三种预设、可调满分和零分阈值；权重自动归一，参数可本机保存。
+- 网格点击详情、设施直线连接、本地设施名称搜索、设施点图层。
+- CSV 结果、原始 POI GeoJSON、评分参数 JSON 导出；本地 GeoJSON 导入。
+- 地图加载失败提示、区域规模限制、计算 Worker、窄屏参数面板。
+
+## 数据快照
+
+来源：[Geofabrik 上海 OSM](https://download.geofabrik.de/asia/china/shanghai.html)，数据截至 **2026-10-20T20:23:47Z**，下载于 2026-10-22。
+
+| 类别 | OSM 标签 | 记录数 |
+|---|---|---:|
+| 咖啡店 | `amenity=cafe` | 1,634 |
+| 商场 | `shop=mall` | 540 |
+| 学校 | `amenity=school` | 2,275 |
+| 地铁入口 | `railway=subway_entrance` | 1,493 |
+
+总计 5,942 条设施，上海行政边界 relation/913067，5,464 个已绘制水面多边形。详情见 [data/README.md](data/README.md) 和 `data/metadata.json`。数据使用 ODbL-1.0，保留 © OpenStreetMap contributors 标注。MapLibre 许可证在 `vendor/MAPLIBRE-LICENSE.txt`。
+
+原始 PBF 与隔离 Python 环境在 `.cache/`（不提交、不部署）。使用 `scripts/extract_osm.py` 可从本地 PBF 重新提取；Python 依赖见 `scripts/requirements-data.txt`，不属于运行网页的依赖。
+
+## 计算与复用
+
+网格使用以 `[121.47, 31.23]` 为固定原点、参考纬度 31.23° 的局部米制投影。POI 最近邻使用三维单位球 KD 树，报告地表球面距离，避免以地图像素或 Web Mercator 差值代替实际米数。
+
+单项评分：距离不超过 good 为 100，达到 max 为 0，区间内线性递减。综合分为正权重类别归一加权。缺失正权重类别时总分为 null，另保存 partialScore 和覆盖比例；不把未知当作零分。
+
+调整权重和阈值只重评分；改变网格或区域才重新计算最近距离，都不发出距离服务请求。重新访问会载入打包快照；需要最新设施时，替换快照并重新构建发布。
+
+## 重要边界
+
+- OSM 是社区维护的数据，覆盖可能不均、设施可能过时；这些数量不是上海设施普查。分数和“最近”仅针对已收录记录。
+- 多边形商场、学校使用内部代表点，通常不是入口；地铁保留每个单独出入口。
+- 学校没有区分学段，不代表质量、学区或入学资格。
+- 直线距离不计算道路、跨江绕行、围墙、封闭园区及开放时间。
+- 以网格中心做边界与水面过滤，边缘方格没有按边界精确裁剪；未绘制的水面可能保留。
+- “上海主要陆域”分析框为 `[120.85, 30.65, 122.05, 31.89]`，不含行政边界的全部远海水域。
+- 设施导入仅在本机内存中使用，刷新恢复打包数据；输入为 WGS84 Point FeatureCollection，category 必须为 cafe/mall/school/metro。
+
+## 免注册版本
+
+此版本仅使用免费 OSM 数据与 OpenFreeMap 底图，不需要注册高德、不需要 API Key，也不包含付费接口。设施数据可在本地反复计算；在线底图仍需要网络。
