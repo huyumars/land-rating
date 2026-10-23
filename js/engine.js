@@ -1,3 +1,5 @@
+import { createGridClipper } from './grid-clip.js';
+
 /** Pure, offline distance and scoring functions. Coordinates are WGS84. */
 export const EARTH_RADIUS_METERS = 6_371_008.8;
 const DEG_TO_RAD = Math.PI / 180;
@@ -15,7 +17,7 @@ export const CATEGORIES = Object.freeze([
 ]);
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  gridSize: 250,
+  gridSize: 500,
   quantityWeight: 30,
   countRadius: 1000,
   weights: Object.freeze(Object.fromEntries(CATEGORIES.map((category) => [category.id, category.defaultWeight]))),
@@ -231,7 +233,7 @@ function boundaryPredicate(boundary, emptyResult = true) {
     && point[1] >= bounds[1] && point[1] <= bounds[3] && inPolygon(point, rings));
 }
 
-export function calculateGrid({ bbox, gridSize = DEFAULT_SETTINGS.gridSize, countRadius = DEFAULT_SETTINGS.countRadius, index, categories = CATEGORY_IDS, boundary = null, excludeBoundary = null }) {
+export function calculateGrid({ bbox, gridSize = DEFAULT_SETTINGS.gridSize, countRadius = DEFAULT_SETTINGS.countRadius, index, categories = CATEGORY_IDS, boundary = null, excludeBoundary = null, clipBoundary = null }) {
   if (!Array.isArray(bbox) || bbox.length !== 4 || !bbox.every(Number.isFinite)
     || !isCoordinate(bbox.slice(0, 2)) || !isCoordinate(bbox.slice(2, 4))
     || bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) throw new RangeError('分析范围必须为 [西, 南, 东, 北]，且范围不能为空。');
@@ -250,18 +252,22 @@ export function calculateGrid({ bbox, gridSize = DEFAULT_SETTINGS.gridSize, coun
   // Precompute polygon bounds once: most water polygons can be skipped cheaply.
   const inside = boundaryPredicate(boundary);
   const excluded = boundaryPredicate(excludeBoundary, false);
+  const insideClip = boundaryPredicate(clipBoundary);
+  const clipCell = clipBoundary ? createGridClipper(clipBoundary, { project, gridSize, minColumn, maxColumn, minRow, maxRow }) : null;
   const features = [];
   for (let row = minRow; row <= maxRow; row += 1) {
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const x = column * gridSize;
       const y = row * gridSize;
       const center = unproject([x + gridSize / 2, y + gridSize / 2]);
-      if (center[0] < bbox[0] || center[0] > bbox[2] || center[1] < bbox[1] || center[1] > bbox[3] || !inside(center) || excluded(center)) continue;
+      if (center[0] < bbox[0] || center[0] > bbox[2] || center[1] < bbox[1] || center[1] > bbox[3] || !inside(center) || excluded(center) || !insideClip(center)) continue;
       const corners = [[x, y], [x + gridSize, y], [x + gridSize, y + gridSize], [x, y + gridSize], [x, y]].map(unproject);
+      const geometry = clipCell ? clipCell(corners, column, row) : { type: 'Polygon', coordinates: [corners] };
+      if (!geometry) continue;
       const id = `${gridSize}:${column}:${row}`;
       features.push({
         type: 'Feature', id,
-        geometry: { type: 'Polygon', coordinates: [corners] },
+        geometry,
         properties: {
           id, center,
           distances: Object.fromEntries(categoryIds.map((category) => [category, findNearest(index, category, center)])),
@@ -270,7 +276,7 @@ export function calculateGrid({ bbox, gridSize = DEFAULT_SETTINGS.gridSize, coun
       });
     }
   }
-  return { type: 'FeatureCollection', features, metadata: { bbox: [...bbox], gridSize, countRadius, categories: categoryIds, projection: 'local-equirectangular-31.23', boundaryMode: 'center' } };
+  return { type: 'FeatureCollection', features, metadata: { bbox: [...bbox], gridSize, countRadius, categories: categoryIds, projection: 'local-equirectangular-31.23', boundaryMode: 'center', clipMode: clipBoundary ? 'polygon-intersection' : 'none', clipBoundaryMode: clipBoundary ? 'center-and-polygon-intersection' : null } };
 }
 
 export function validateSettings(settings = {}) {

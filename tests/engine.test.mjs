@@ -146,7 +146,7 @@ test('score thresholds are continuous and settings reject invalid values', () =>
   assert.throws(() => scoreGrid(grid, { thresholds: { cafe: { good: NaN } } }), /满分距离/);
   assert.throws(() => calculateGrid({ bbox: [0, 0, 1, 1], gridSize: 0 }), /网格边长/);
   assert.equal(CATEGORIES.length, 6);
-  assert.equal(DEFAULT_SETTINGS.gridSize, 250);
+  assert.equal(DEFAULT_SETTINGS.gridSize, 500);
   assert.equal(DEFAULT_SETTINGS.countRadius, 1000);
   assert.equal(DEFAULT_SETTINGS.quantityWeight, 30);
   assert.equal(Object.values(DEFAULT_SETTINGS.weights).reduce((sum, value) => sum + value, 0), 100);
@@ -164,7 +164,7 @@ test('CSV preserves missing distances, quotes names and protects formulas', () =
 test('more distinct nearby facilities score higher at the same nearest distance, with a cap', () => {
   const center = unproject([125, 125]);
   const features = Array.from({ length: 7 }, (_, id) => poi('cafe', [center[0], center[1] + (100 + id * 80) / EARTH_RADIUS_METERS * 180 / Math.PI], `cafe-${id}`, `cafe-${id}`));
-  const calculate = (subset) => calculateGrid({ bbox: metricBbox(1, 1, 249, 249), index: buildPoiIndex(collection(subset)), countRadius: 1000 });
+  const calculate = (subset) => calculateGrid({ bbox: metricBbox(1, 1, 249, 249), gridSize: 250, index: buildPoiIndex(collection(subset)), countRadius: 1000 });
   const single = calculate(features.slice(0, 1));
   const multiple = calculate(features.slice(0, 5));
   const beyondTarget = calculate(features);
@@ -254,7 +254,7 @@ test('KD radius query agrees with exhaustive grouped counts across the globe', (
 test('all six categories produce counts and scores while absent data stays null', () => {
   const center = unproject([125, 125]);
   const index = buildPoiIndex(collection(CATEGORIES.map(({ id }) => poi(id, center))));
-  const grid = calculateGrid({ bbox: metricBbox(1, 1, 249, 249), index });
+  const grid = calculateGrid({ bbox: metricBbox(1, 1, 249, 249), gridSize: 250, index });
   const scored = scoreGrid(grid).features[0].properties;
   assert.equal(grid.metadata.countRadius, 1000);
   assert.equal(Object.keys(scored.nearbyCounts).length, 6);
@@ -266,7 +266,7 @@ test('all six categories produce counts and scores while absent data stays null'
     assert.ok(scored.quantityScores[id] > 0 && scored.quantityScores[id] <= 100);
     assert.ok(scored.scores[id] > 70 && scored.scores[id] <= 100);
   }
-  const empty = scoreGrid(calculateGrid({ bbox: metricBbox(1, 1, 249, 249), index: buildPoiIndex(collection()) })).features[0].properties;
+  const empty = scoreGrid(calculateGrid({ bbox: metricBbox(1, 1, 249, 249), gridSize: 250, index: buildPoiIndex(collection()) })).features[0].properties;
   assert.equal(empty.score, null);
   assert.equal(empty.partialScore, null);
   assert.equal(empty.coverage, 0);
@@ -318,4 +318,109 @@ test('CSV exports counts, component scores and the actual calculation radius and
   assert.equal(row.sports_distance_score, '100');
   assert.equal(row.sports_quantity_score, '80');
   assert.equal(row.library_nearby_count, '');
+});
+
+const metricPolygon = (rings) => ({ type: 'Polygon', coordinates: rings.map((ring) => ring.map(unproject)) });
+const rectangleRing = (west, south, east, north) => [[west, south], [east, south], [east, north], [west, north], [west, south]];
+function geometryAreaMeters(geometry) {
+  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  const ringArea = (ring) => {
+    const points = ring.map(project);
+    const [x0, y0] = points[0];
+    let area = 0;
+    for (let i = 0; i < points.length - 1; i += 1) area += (points[i][0] - x0) * (points[i + 1][1] - y0) - (points[i + 1][0] - x0) * (points[i][1] - y0);
+    return Math.abs(area) / 2;
+  };
+  return polygons.reduce((sum, rings) => sum + ringArea(rings[0]) - rings.slice(1).reduce((holes, ring) => holes + ringArea(ring), 0), 0);
+}
+
+test('a triangular clip boundary produces true edge geometry and keeps fixed sampling and score values', () => {
+  const clipBoundary = metricPolygon([[[0, 0], [1000, 0], [0, 1000], [0, 0]]]);
+  const index = buildPoiIndex(collection(CATEGORIES.map(({ id }) => poi(id, unproject([200, 200])))));
+  const options = { bbox: metricBbox(1, 1, 999, 999), gridSize: 500, index };
+  const original = calculateGrid(options);
+  const before = structuredClone(original);
+  const clipped = calculateGrid({ ...options, clipBoundary });
+  assert.equal(original.features.length, 4);
+  assert.equal(clipped.features.length, 3);
+  assert.equal(original.metadata.clipMode, 'none');
+  assert.equal(clipped.metadata.clipMode, 'polygon-intersection');
+  assert.ok(Math.abs(clipped.features.reduce((sum, feature) => sum + geometryAreaMeters(feature.geometry), 0) - 500000) < 0.001);
+  const originalScores = scoreGrid(original);
+  const clippedScores = scoreGrid(clipped);
+  for (const cell of clippedScores.features) {
+    const originalCell = originalScores.features.find((candidate) => candidate.id === cell.id);
+    assert.deepEqual(cell.properties, originalCell.properties);
+    const rings = cell.geometry.type === 'Polygon' ? cell.geometry.coordinates : cell.geometry.coordinates.flat();
+    for (const ring of rings) for (const point of ring) assert.ok(pointInBoundary(point, clipBoundary), 'clipped vertices must stay within the true boundary');
+  }
+  const edgeCell = clipped.features.find((feature) => feature.id === '500:1:0');
+  const fixedCenter = project(edgeCell.properties.center);
+  assert.ok(Math.abs(fixedCenter[0] - 750) < 1e-6 && Math.abs(fixedCenter[1] - 250) < 1e-6);
+  assert.ok(Math.abs(geometryAreaMeters(edgeCell.geometry) - 125000) < 0.001);
+  assert.deepEqual(original, before);
+  assert.deepEqual(calculateGrid({ ...options, clipBoundary: null }), original);
+});
+
+test('intersection of a concave polygon and one grid cell preserves disconnected pieces', () => {
+  // The two arms connect only above this grid cell. Its fixed center remains
+  // in the left arm; clipping must not draw a bridge across the outside gap.
+  const clipBoundary = metricPolygon([[[0, 0], [300, 0], [300, 600], [400, 600], [400, 0], [500, 0], [500, 700], [0, 700], [0, 0]]]);
+  const grid = calculateGrid({ bbox: metricBbox(1, 1, 499, 499), gridSize: 500, index: buildPoiIndex(collection()), clipBoundary });
+  assert.equal(grid.features.length, 1);
+  const geometry = grid.features[0].geometry;
+  assert.equal(geometry.type, 'MultiPolygon');
+  assert.equal(geometry.coordinates.length, 2);
+  assert.ok(Math.abs(geometryAreaMeters(geometry) - 200000) < 0.001);
+  for (const polygon of geometry.coordinates) {
+    for (const ring of polygon) for (const point of ring) assert.ok(pointInBoundary(point, clipBoundary));
+  }
+});
+
+test('a hole entirely inside a cell remains a hole, rather than being lost by the interior fast path', () => {
+  const outer = rectangleRing(-100, -100, 600, 600);
+  const hole = rectangleRing(50, 50, 150, 150);
+  const clipBoundary = { type: 'Feature', properties: {}, geometry: metricPolygon([outer, hole]) };
+  const grid = calculateGrid({ bbox: metricBbox(1, 1, 499, 499), gridSize: 500, index: buildPoiIndex(collection()), clipBoundary });
+  assert.equal(grid.features.length, 1);
+  assert.equal(grid.features[0].geometry.type, 'Polygon');
+  assert.equal(grid.features[0].geometry.coordinates.length, 2);
+  assert.ok(Math.abs(geometryAreaMeters(grid.features[0].geometry) - 240000) < 0.001);
+  assert.equal(pointInBoundary(unproject([100, 100]), grid.features[0].geometry), false);
+  assert.equal(pointInBoundary(unproject([250, 250]), grid.features[0].geometry), true);
+  const centerHole = metricPolygon([outer, rectangleRing(200, 200, 300, 300)]);
+  assert.equal(calculateGrid({ bbox: metricBbox(1, 1, 499, 499), gridSize: 500, index: buildPoiIndex(collection()), clipBoundary: centerHole }).features.length, 0);
+});
+
+test('MultiPolygon and FeatureCollection clips preserve islands and union overlapping members', () => {
+  const first = metricPolygon([rectangleRing(0, 0, 300, 500)]);
+  const island = metricPolygon([rectangleRing(400, 100, 500, 200)]);
+  const multi = { type: 'MultiPolygon', coordinates: [first.coordinates, island.coordinates] };
+  const options = { bbox: metricBbox(1, 1, 499, 499), gridSize: 500, index: buildPoiIndex(collection()) };
+  const grid = calculateGrid({ ...options, clipBoundary: multi });
+  assert.equal(grid.features[0].geometry.type, 'MultiPolygon');
+  assert.equal(grid.features[0].geometry.coordinates.length, 2);
+  assert.ok(Math.abs(geometryAreaMeters(grid.features[0].geometry) - 160000) < 0.001);
+  const overlap = metricPolygon([rectangleRing(250, 0, 350, 500)]);
+  const combined = collection([
+    { type: 'Feature', properties: {}, geometry: multi },
+    { type: 'Feature', properties: {}, geometry: overlap },
+  ]);
+  const merged = calculateGrid({ ...options, clipBoundary: combined });
+  assert.equal(merged.features[0].geometry.type, 'MultiPolygon');
+  assert.ok(Math.abs(geometryAreaMeters(merged.features[0].geometry) - 185000) < 0.001);
+});
+
+test('clipBoundary keeps administrative and water center filters and does not alter full interior squares', () => {
+  const index = buildPoiIndex(collection());
+  const options = { bbox: metricBbox(1, 1, 999, 999), gridSize: 500, index };
+  const clipBoundary = metricPolygon([rectangleRing(-1000, -1000, 2000, 2000)]);
+  const original = calculateGrid(options);
+  const clipped = calculateGrid({ ...options, clipBoundary });
+  assert.deepEqual(clipped.features, original.features);
+  const administrative = metricPolygon([rectangleRing(0, 0, 500, 1000)]);
+  const water = metricPolygon([rectangleRing(0, 0, 500, 500)]);
+  const filtered = calculateGrid({ ...options, boundary: administrative, excludeBoundary: water, clipBoundary });
+  assert.equal(filtered.features.length, 1);
+  assert.equal(filtered.features[0].id, '500:0:1');
 });

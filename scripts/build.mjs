@@ -7,6 +7,8 @@ const required = ['index.html', 'styles.css', 'favicon.svg', 'js', 'vendor', 'da
 for (const file of required) await stat(path.join(root, file));
 const pois = JSON.parse(await readFile(path.join(root, 'data/pois.geojson'), 'utf8'));
 if (pois.type !== 'FeatureCollection' || !pois.features.length) throw new Error('缺少真实设施数据。');
+const ring = JSON.parse(await readFile(path.join(root, 'data/suburban-ring.geojson'), 'utf8'));
+if (ring.type !== 'FeatureCollection' || !ring.features?.length || !Array.isArray(ring.bbox) || ring.bbox.length !== 4 || !ring.bbox.every(Number.isFinite)) throw new Error('缺少有效的郊环分析边界。');
 await rm(destination, { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
 for (const file of required) await cp(path.join(root, file), path.join(destination, file), { recursive: true });

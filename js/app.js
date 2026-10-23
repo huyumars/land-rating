@@ -1,4 +1,4 @@
-import { CATEGORIES, DEFAULT_SETTINGS, scoreGrid, gridToCsv, project, validateSettings } from './engine.js';
+import { CATEGORIES, DEFAULT_SETTINGS, scoreGrid, gridToCsv, project, pointInBoundary, validateSettings } from './engine.js';
 import { createColorScale, displayScore } from './score-colors.js';
 
 const $ = (selector) => document.querySelector(selector);
@@ -7,6 +7,7 @@ const EMPTY = { type: 'FeatureCollection', features: [] };
 const ORDER = ['metro', 'school', 'mall', 'cafe', 'sports', 'library'];
 const CATEGORY = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
 const REGIONS = {
+  suburban: { label: '郊环内 · G1503', bbox: null },
   central: { label: '上海中心城区', bbox: [121.41, 31.18, 121.55, 31.29] },
   xuhui: { label: '徐汇 · 衡复周边', bbox: [121.40, 31.16, 121.48, 31.23] },
   jingan: { label: '静安 · 南京西路周边', bbox: [121.40, 31.21, 121.48, 31.28] },
@@ -34,19 +35,21 @@ const settingsKey = 'shanghai-neighborhood-settings-v2';
 
 let settings = structuredClone(DEFAULT_SETTINGS);
 try { const saved = JSON.parse(localStorage.getItem(settingsKey)); if (saved) settings = validateSettings(saved); } catch { /* Private mode or old settings: use defaults. */ }
-if (![100, 250, 500, 1000].includes(settings.gridSize)) settings.gridSize = 250;
-let region = 'central';
+if (![500, 1000].includes(settings.gridSize)) settings.gridSize = 500;
+let region = 'suburban';
 let layer = 'overall';
 let colorMode = 'relative';
 let colorScale = createColorScale([]);
 let rawGrid = EMPTY;
 let scoredGrid = EMPTY;
 let selectedId = null;
-let currentBBox = [...REGIONS.central.bbox];
+let currentBBox = [...REGIONS.all.bbox];
+let computedRegion = null;
 let computedGridSize = null;
 let pois = EMPTY;
 let metadata = {};
 let boundary = EMPTY;
+let suburbanBoundary = EMPTY;
 let water = EMPTY;
 let dataReady = false;
 let map;
@@ -146,6 +149,12 @@ function updateGridControls() {
   });
   $('#grid-size-caption').textContent = `${settings.gridSize} × ${settings.gridSize} m`;
 }
+function updateRegionControls() {
+  $('#region-select').value = region;
+  $('#region-caption').textContent = region === 'suburban'
+    ? '按现状郊环道路围合范围裁切，含北侧共线路段。'
+    : region === 'viewport' ? '按当前地图视野分析上海陆地网格。' : '局部观察范围，按上海陆地中心点筛选。';
+}
 function metric(feature) {
   return layer === 'overall' ? feature.properties.score : feature.properties.scores?.[layer];
 }
@@ -186,6 +195,7 @@ function renderGrid() {
   map.getSource('grid')?.setData(mapGrid());
   const selected = scoredGrid.features.find((f) => f.properties.id === selectedId);
   map.getSource('selection')?.setData(selected ? { type: 'FeatureCollection', features: [selected] } : EMPTY);
+  map.getSource('analysis-boundary')?.setData(computedRegion === 'suburban' ? suburbanBoundary : EMPTY);
 }
 function renderDetail() {
   const feature = scoredGrid.features.find((f) => f.properties.id === selectedId);
@@ -279,7 +289,7 @@ function initializeMap() {
   }
 }
 function setupLayers() {
-  for (const [name, data] of Object.entries({ grid: EMPTY, selection: EMPTY, connections: EMPTY, endpoints: EMPTY, pois, boundary })) map.addSource(name, { type: 'geojson', data });
+  for (const [name, data] of Object.entries({ grid: EMPTY, selection: EMPTY, connections: EMPTY, endpoints: EMPTY, pois, boundary, 'analysis-boundary': EMPTY })) map.addSource(name, { type: 'geojson', data });
   map.addLayer({ id: 'admin-boundary', source: 'boundary', type: 'line', paint: { 'line-color': '#b3c2a9', 'line-width': 1.2, 'line-dasharray': [4, 4], 'line-opacity': .7 } });
   const labels = map.getStyle().layers.find((l) => l.type === 'symbol' && l.layout?.['text-field']);
   const before = labels?.id;
@@ -288,6 +298,7 @@ function setupLayers() {
     'fill-opacity': .84,
   } }, before);
   map.addLayer({ id: 'grid-lines', type: 'line', source: 'grid', paint: { 'line-color': '#fff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, .2, 14, .65], 'line-opacity': .48 } }, before);
+  map.addLayer({ id: 'analysis-boundary-line', type: 'line', source: 'analysis-boundary', paint: { 'line-color': '#1b514d', 'line-width': 2.4, 'line-opacity': .9 } }, before);
   map.addLayer({ id: 'selection-fill', type: 'fill', source: 'selection', paint: { 'fill-color': '#fff', 'fill-opacity': .08 } });
   map.addLayer({ id: 'selection-halo', type: 'line', source: 'selection', paint: { 'line-color': '#fff', 'line-width': 5.5 } });
   map.addLayer({ id: 'selection-line', type: 'line', source: 'selection', paint: { 'line-color': '#183942', 'line-width': 2.5 } });
@@ -324,6 +335,7 @@ async function analyze({ fit = true } = {}) {
     const b = map.getBounds();
     bbox = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
   }
+  if (!bbox) return preflightNotice('郊环边界尚未读取完成，请刷新重试。');
   const limits = REGIONS.all.bbox;
   bbox = [Math.max(bbox[0], limits[0]), Math.max(bbox[1], limits[1]), Math.min(bbox[2], limits[2]), Math.min(bbox[3], limits[3])];
   if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) return preflightNotice('当前视野在上海分析范围之外，请回到上海后再计算。');
@@ -336,21 +348,23 @@ async function analyze({ fit = true } = {}) {
   try {
     const gridSize = settings.gridSize;
     const countRadius = settings.countRadius;
-    const { grid, elapsed } = await callWorker('calculate', { bbox, gridSize, countRadius });
+    const analysisRegion = region;
+    const { grid, elapsed } = await callWorker('calculate', { bbox, gridSize, countRadius, region: analysisRegion });
     if (version !== analysisVersion) return;
     if (!grid.features.length) { toast('范围内没有可分析的陆地中心点，请移动或扩大区域。'); return; }
     rawGrid = grid;
     currentBBox = bbox;
     computedGridSize = gridSize;
+    computedRegion = analysisRegion;
     selectedId = null;
     rescore();
-    const center = region === 'central' ? [121.4737, 31.2304] : [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
+    const center = ['central', 'suburban'].includes(analysisRegion) ? [121.4737, 31.2304] : [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
     const chosen = scoredGrid.features.reduce((best, f) => {
       const d = (f.properties.center[0] - center[0]) ** 2 + (f.properties.center[1] - center[1]) ** 2;
       return !best || d < best.d ? { f, d } : best;
     }, null);
     if (chosen) selectCell(chosen.f.properties.id);
-    $('#status-text').textContent = `${number(grid.features.length)} 格 · ${gridSize} m 网格 · ${distanceText(countRadius)} 数量半径 · ${Math.max(1, Math.round(elapsed))} ms`;
+    $('#status-text').textContent = `${analysisRegion === 'suburban' ? '郊环内 · ' : ''}${number(grid.features.length)} 格 · ${gridSize} m 网格 · ${distanceText(countRadius)} 数量半径 · ${Math.max(1, Math.round(elapsed))} ms`;
     if (fit) fitArea();
     $('#settings-panel').classList.remove('open');
   } catch (error) {
@@ -386,10 +400,7 @@ function searchPois() {
     popup?.remove();
     popup = new maplibregl.Popup().setLngLat(f.geometry.coordinates).setHTML(`<strong>${escape(f.properties.name)}</strong><br>${escape(CATEGORY[f.properties.category].label)} · OSM 已收录`).addTo(map);
     map.flyTo({ center: f.geometry.coordinates, zoom: 14.5, duration: 700 });
-    const cell = scoredGrid.features.find((g) => {
-      const ring = g.geometry.coordinates[0];
-      return f.geometry.coordinates[0] >= ring[0][0] && f.geometry.coordinates[0] <= ring[2][0] && f.geometry.coordinates[1] >= ring[0][1] && f.geometry.coordinates[1] <= ring[2][1];
-    });
+    const cell = scoredGrid.features.find((g) => pointInBoundary(f.geometry.coordinates, g.geometry));
     if (cell) selectCell(cell.properties.id);
     else toast('该设施在当前分析区域外，可选择“当前地图视野”重新计算。');
   }));
@@ -414,6 +425,8 @@ function setupEvents() {
   $('#region-select').addEventListener('change', (event) => {
     region = event.target.value;
     if (region === 'all' && settings.gridSize < 1000) { settings.gridSize = 1000; updateGridControls(); }
+    if (region === 'suburban' && settings.gridSize < 500) { settings.gridSize = 500; updateGridControls(); }
+    updateRegionControls();
     analyze();
   });
   $$('#grid-size-control button').forEach((button) => button.addEventListener('click', () => {
@@ -439,8 +452,8 @@ function setupEvents() {
   $('#show-pois').addEventListener('change', (event) => { if (mapReady) map.setLayoutProperty('poi-points', 'visibility', event.target.checked ? 'visible' : 'none'); });
   $('#reset-button').addEventListener('click', () => {
     settings = structuredClone(DEFAULT_SETTINGS);
-    region = 'central';
-    $('#region-select').value = region;
+    region = 'suburban';
+    updateRegionControls();
     renderWeightControls();
     $$('.weight-presets button').forEach((b) => b.classList.toggle('active', b.dataset.preset === 'balanced'));
     persistSettings();
@@ -473,7 +486,7 @@ function setupEvents() {
     download(gridToCsv(scoredGrid), `上海便利度-${computedGridSize}m-${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv;charset=utf-8');
     toast(`已导出 ${number(scoredGrid.features.length)} 个网格的评分与距离。`);
   });
-  $('#download-settings').addEventListener('click', () => download(JSON.stringify({ ...settings, region, bbox: currentBBox, dataDate: metadata.dataDate, distanceMode: 'great-circle', source: metadata.source }, null, 2), '上海便利度-评分参数.json'));
+  $('#download-settings').addEventListener('click', () => download(JSON.stringify({ ...settings, region: computedRegion ?? region, bbox: currentBBox, analysisBoundary: computedRegion === 'suburban' ? suburbanBoundary.metadata : null, dataDate: metadata.dataDate, distanceMode: 'great-circle', source: metadata.source }, null, 2), '上海便利度-评分参数.json'));
   $('#download-pois').addEventListener('click', () => download(JSON.stringify(pois), '上海设施-OSM.geojson', 'application/geo+json'));
   $('#poi-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(searchPois, 160); });
   $('#poi-search').addEventListener('keydown', (event) => { if (event.key === 'Escape') $('#search-results').hidden = true; if (event.key === 'Enter') $('#search-results button')?.click(); });
@@ -495,7 +508,7 @@ async function importData(event) {
     if (!valid.length) throw new Error('未找到有效设施点，请检查 category 和经纬度。');
     const imported = { type: 'FeatureCollection', features: valid, metadata: { source: `用户导入：${file.name}`, dataDate: null } };
     setBusy(true, '读取本地设施数据');
-    const result = await callWorker('init', { pois: imported, boundary, water });
+    const result = await callWorker('init', { pois: imported, boundary, water, suburbanBoundary });
     pois = imported;
     metadata = imported.metadata;
     // A new dataset invalidates every distance and score from the old snapshot.
@@ -504,6 +517,7 @@ async function importData(event) {
     scoredGrid = EMPTY;
     selectedId = null;
     computedGridSize = null;
+    computedRegion = null;
     $('#average-score').textContent = '—';
     $('#cell-count').textContent = '—';
     $('#detail-card').hidden = true;
@@ -521,14 +535,14 @@ async function importData(event) {
 function renderDataInfo(counts, groupCounts = {}) {
   const count = Object.values(counts).reduce((a, b) => a + b, 0);
   $('#poi-count').textContent = number(count);
-  $('#data-description').textContent = metadata.dataDate ? `设施、边界和水面来自 Geofabrik 的上海 OpenStreetMap 快照，截至 ${metadata.dataDate.slice(0, 10)}。共 ${number(count)} 条设施记录，数据按 ODbL 许可使用。下载范围包含部分边界缓冲，但不保证所有边界外设施。` : `${metadata.source}。共 ${number(count)} 条有效记录；请自行确认数据日期与覆盖范围。分析仍限制在上海主要陆域。`;
+  $('#data-description').textContent = metadata.dataDate ? `设施、上海行政界和水面来自 Geofabrik 的上海 OpenStreetMap 快照，截至 ${metadata.dataDate.slice(0, 10)}。郊环道路边界的跨省段由同日江苏快照补齐。共 ${number(count)} 条设施记录，数据按 ODbL 许可使用。下载范围包含部分边界缓冲，但不保证所有边界外设施。` : `${metadata.source}。共 ${number(count)} 条有效记录；请自行确认数据日期与覆盖范围。分析仍限制在上海主要陆域。`;
   $('#data-counts').innerHTML = ORDER.map((id) => `<div>${CATEGORY[id].label}<strong>${number(groupCounts[id] ?? counts[id] ?? 0)}</strong><small>${number(counts[id] || 0)} 条设施点记录</small></div>`).join('');
   const grouping = metadata.grouping;
   $('#grouping-description').textContent = grouping ? '设施数量根据同一来源的分组信息去重：地铁入口优先按站点关系合并，缺关系时使用附近站点推断；同一运动场馆内部的子设施尽量合并。尚未关联的记录仍可能重复计数。' : '计数按数据中的 groupId 去重，缺少分组时按设施 ID 区分。用户导入数据可提供相同 groupId 合并同一站点入口或同一场馆子设施。';
 }
 async function loadData() {
   try {
-    const [poiData, boundaryData, waterData, meta] = await Promise.all(['pois.geojson', 'boundary.geojson', 'water.geojson', 'metadata.json'].map(async (file) => {
+    const [poiData, boundaryData, waterData, meta, suburbanData] = await Promise.all(['pois.geojson', 'boundary.geojson', 'water.geojson', 'metadata.json', 'suburban-ring.geojson'].map(async (file) => {
       const response = await fetch(new URL(`../data/${file}`, import.meta.url));
       if (!response.ok) throw new Error(`数据文件 ${file} 读取失败。`);
       return response.json();
@@ -537,7 +551,12 @@ async function loadData() {
     boundary = boundaryData;
     water = waterData;
     metadata = meta;
-    const result = await callWorker('init', { pois, boundary, water });
+    const ringBBox = suburbanData.bbox ?? suburbanData.metadata?.bbox;
+    if (!suburbanData.features?.length || !Array.isArray(ringBBox) || ringBBox.length !== 4 || !ringBBox.every(Number.isFinite)) throw new Error('郊环边界数据无效，请刷新重试。');
+    suburbanBoundary = suburbanData;
+    REGIONS.suburban.bbox = ringBBox;
+    currentBBox = [...ringBBox];
+    const result = await callWorker('init', { pois, boundary, water, suburbanBoundary });
     dataReady = true;
     renderDataInfo(result.counts, result.groupCounts);
     if (mapReady) { map.getSource('pois').setData(pois); map.getSource('boundary').setData(boundary); }
@@ -550,6 +569,7 @@ async function loadData() {
 }
 
 renderWeightControls();
+updateRegionControls();
 setupEvents();
 initializeMap();
 loadData();
