@@ -171,11 +171,10 @@ function rescore() {
 function refreshColors() {
   colorScale = createColorScale(scoredGrid.features.map(metric), colorMode);
   const format = (value) => value.toFixed(1);
-  $('#legend-bins').innerHTML = colorScale.bins.length ? colorScale.bins.map((bin) => {
-    const range = bin.min === bin.max ? `${format(bin.min)} 分` : `${format(bin.min)} – ${bin.upperInclusive ? '' : '<'}${format(bin.max)}`;
-    return `<div class="legend-bin"><span class="legend-swatch" style="background:${bin.color}"></span><span class="legend-range">${range}</span><span class="legend-count">${number(bin.count)} 格</span></div>`;
-  }).join('') : '<div class="legend-empty">暂无有效评分</div>';
-  $('#legend-note').textContent = colorMode === 'relative' ? '当前区域内对比 · 同分同色' : '固定 0–100 分 · 可跨区域比较';
+  const [min, max] = colorScale.domain;
+  const gradient = colorScale.stops.map((stop) => `${stop.color} ${stop.position * 100}%`).join(', ');
+  $('#legend-scale').innerHTML = colorScale.total ? `<div class="legend-gradient" role="img" aria-label="${format(min)} 至 ${format(max)} 分的连续渐变色标" style="background:linear-gradient(to right in srgb, ${gradient})"></div><div class="legend-ticks">${(min === max ? [min] : [min, (min + max) / 2, max]).map((value) => `<span>${format(value)}</span>`).join('')}</div><div class="legend-direction">${min === max ? '<span>当前网格评分相同</span>' : '<span>较低</span><span>较高</span>'}</div>` : '<div class="legend-empty">暂无有效评分</div>';
+  $('#legend-note').textContent = colorMode === 'relative' ? '连续渐变 · 按当前区域分布拉伸' : '连续渐变 · 固定 0–100 分';
   $$('[data-color-mode]').forEach((button) => {
     const active = button.dataset.colorMode === colorMode;
     button.classList.toggle('active', active);
