@@ -7,7 +7,7 @@
 需要 Node.js 20 或更高版本，不需要安装 npm 依赖：
 
 ```sh
-cd /Users/mars/Project/land-rating/shanghai-access
+cd land-rating
 npm run dev
 ```
 
@@ -19,6 +19,14 @@ npm run build
 ```
 
 `dist/` 为可部署的纯静态网站。Web Worker 需要通过 HTTP/HTTPS 打开，不能直接双击 HTML。在线底图需要网络；评分数据和 MapLibre 代码已随应用打包，不使用公共 OSM 瓦片服务器批量下载。
+
+## GitHub Pages
+
+项目支持部署到 GitHub Pages 的仓库子路径。仓库 `Settings → Pages → Build and deployment → Source` 选择 **GitHub Actions**。推送到 `main` 后，[发布工作流](.github/workflows/pages.yml) 会运行评分测试、构建并发布 `dist/`，也可在 Actions 页面手动运行。
+
+GitHub 仓库：<https://github.com/huyumars/land-rating>。Pages 启用并首次部署成功后，网站地址为 <https://huyumars.github.io/land-rating/>。
+
+工作流使用仓库自带的 `GITHUB_TOKEN`，无需配置个人令牌或其他 Secrets。仅部署网站和开放数据；缓存 PBF、虚拟环境、环境变量与 Git 元数据不会进入站点。
 
 ## 已实现
 
